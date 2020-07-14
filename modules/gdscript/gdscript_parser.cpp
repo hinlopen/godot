@@ -5421,23 +5421,11 @@ void GDScriptParser::_determine_inheritance(ClassNode *p_class, bool p_recursive
 				}
 				p = nullptr;
 			} else {
-				List<PropertyInfo> props;
-				ProjectSettings::get_singleton()->get_property_list(&props);
-				for (List<PropertyInfo>::Element *E = props.front(); E; E = E->next()) {
-					String s = E->get().name;
-					if (!s.begins_with("autoload/")) {
-						continue;
-					}
-					String name = s.get_slice("/", 1);
-					if (name == base) {
-						String singleton_path = ProjectSettings::get_singleton()->get(s);
-						if (singleton_path.begins_with("*")) {
-							singleton_path = singleton_path.right(1);
-						}
-						if (!singleton_path.begins_with("res://")) {
-							singleton_path = "res://" + singleton_path;
-						}
-						base_script = ResourceLoader::load(singleton_path);
+				const Map<StringName, ProjectSettings::AutoloadInfo> autoloads = ProjectSettings::get_singleton()->get_autoload_list();
+				for (Map<StringName, ProjectSettings::AutoloadInfo>::Element *E = autoloads.front(); E; E = E->next()) {
+					const ProjectSettings::AutoloadInfo &info = E->value();
+					if (info.name == base) {
+						base_script = ResourceLoader::load(info.path);
 						if (!base_script.is_valid()) {
 							_set_error("Class '" + base + "' could not be fully loaded (script error or cyclic inheritance).", p_class->line);
 							return;
@@ -5792,26 +5780,17 @@ GDScriptParser::DataType GDScriptParser::_resolve_type(const DataType &p_source,
 				name_part++;
 				continue;
 			}
-			List<PropertyInfo> props;
-			ProjectSettings::get_singleton()->get_property_list(&props);
 			String singleton_path;
-			for (List<PropertyInfo>::Element *E = props.front(); E; E = E->next()) {
-				String s = E->get().name;
-				if (!s.begins_with("autoload/")) {
-					continue;
-				}
-				String name = s.get_slice("/", 1);
-				if (name == id) {
-					singleton_path = ProjectSettings::get_singleton()->get(s);
-					if (singleton_path.begins_with("*")) {
-						singleton_path = singleton_path.right(1);
-					}
-					if (!singleton_path.begins_with("res://")) {
-						singleton_path = "res://" + singleton_path;
-					}
+
+			const Map<StringName, ProjectSettings::AutoloadInfo> autoloads = ProjectSettings::get_singleton()->get_autoload_list();
+			for (Map<StringName, ProjectSettings::AutoloadInfo>::Element *E = autoloads.front(); E; E = E->next()) {
+				const ProjectSettings::AutoloadInfo &info = E->value();
+				if (info.name == id) {
+					singleton_path = info.path;
 					break;
 				}
 			}
+
 			if (!singleton_path.empty()) {
 				Ref<Script> script = ResourceLoader::load(singleton_path);
 				Ref<GDScript> gds = script;
@@ -7711,25 +7690,14 @@ GDScriptParser::DataType GDScriptParser::_reduce_identifier_type(const DataType 
 			return _type_from_variant(g);
 		}
 
-		// Non-tool singletons aren't loaded, check project settings
-		List<PropertyInfo> props;
-		ProjectSettings::get_singleton()->get_property_list(&props);
+		// Non-tool singletons aren't loaded, check project settings.
+		const Map<StringName, ProjectSettings::AutoloadInfo> autoloads = ProjectSettings::get_singleton()->get_autoload_list();
+		for (Map<StringName, ProjectSettings::AutoloadInfo>::Element *E = autoloads.front(); E; E = E->next()) {
+			const ProjectSettings::AutoloadInfo &info = E->value();
 
-		for (List<PropertyInfo>::Element *E = props.front(); E; E = E->next()) {
-			String s = E->get().name;
-			if (!s.begins_with("autoload/")) {
-				continue;
-			}
-			String name = s.get_slice("/", 1);
-			if (name == p_identifier) {
-				String script = ProjectSettings::get_singleton()->get(s);
-				if (script.begins_with("*")) {
-					script = script.right(1);
-				}
-				if (!script.begins_with("res://")) {
-					script = "res://" + script;
-				}
-				Ref<Script> singleton = ResourceLoader::load(script);
+			if (info.name == p_identifier) {
+				Ref<Script> singleton = ResourceLoader::load(info.path);
+
 				if (singleton.is_valid()) {
 					DataType result;
 					result.has_type = true;
@@ -7749,7 +7717,7 @@ GDScriptParser::DataType GDScriptParser::_reduce_identifier_type(const DataType 
 				}
 			}
 		}
-
+				
 		// This means looking in the current class, which type is always known
 		_set_error("The identifier \"" + p_identifier.operator String() + "\" isn't declared in the current scope.", p_line);
 	}

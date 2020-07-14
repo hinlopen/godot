@@ -813,55 +813,38 @@ static bool _guess_expression_type(GDScriptCompletionContext &p_context, const G
 													r_type = _type_from_variant(GDScriptLanguage::get_singleton()->get_named_globals_map()[which]);
 													found = true;
 												} else {
-													List<PropertyInfo> props;
-													ProjectSettings::get_singleton()->get_property_list(&props);
-
-													for (List<PropertyInfo>::Element *E = props.front(); E; E = E->next()) {
-														String s = E->get().name;
-														if (!s.begins_with("autoload/")) {
-															continue;
+													const Map<StringName, ProjectSettings::AutoloadInfo> autoloads = ProjectSettings::get_singleton()->get_autoload_list();
+													for (Map<StringName, ProjectSettings::AutoloadInfo>::Element *E = autoloads.front(); E; E = E->next()) {
+														const ProjectSettings::AutoloadInfo &info = E->value();
+														String script = info.path;
+														if (!info.path.ends_with(".gd")) {
+															//not a script, try find the script anyway,
+															//may have some success
+															script = script.get_basename() + ".gd";
 														}
-														String name = s.get_slice("/", 1);
-														if (name == which) {
-															String script = ProjectSettings::get_singleton()->get(s);
 
-															if (script.begins_with("*")) {
-																script = script.right(1);
+														if (FileAccess::exists(script)) {
+															Ref<Script> scr;
+															if (ScriptCodeCompletionCache::get_singleton()) {
+																scr = ScriptCodeCompletionCache::get_singleton()->get_cached_resource(script);
+															} else {
+																scr = ResourceLoader::load(script);
 															}
-
-															if (!script.begins_with("res://")) {
-																script = "res://" + script;
-															}
-
-															if (!script.ends_with(".gd")) {
-																//not a script, try find the script anyway,
-																//may have some success
-																script = script.get_basename() + ".gd";
-															}
-
-															if (FileAccess::exists(script)) {
-																Ref<Script> scr;
-																if (ScriptCodeCompletionCache::get_singleton()) {
-																	scr = ScriptCodeCompletionCache::get_singleton()->get_cached_resource(script);
+															if (scr.is_valid()) {
+																r_type.type.has_type = true;
+																r_type.type.script_type = scr;
+																r_type.type.is_constant = false;
+																Ref<GDScript> gds = scr;
+																if (gds.is_valid()) {
+																	r_type.type.kind = GDScriptParser::DataType::GDSCRIPT;
 																} else {
-																	scr = ResourceLoader::load(script);
+																	r_type.type.kind = GDScriptParser::DataType::SCRIPT;
 																}
-																if (scr.is_valid()) {
-																	r_type.type.has_type = true;
-																	r_type.type.script_type = scr;
-																	r_type.type.is_constant = false;
-																	Ref<GDScript> gds = scr;
-																	if (gds.is_valid()) {
-																		r_type.type.kind = GDScriptParser::DataType::GDSCRIPT;
-																	} else {
-																		r_type.type.kind = GDScriptParser::DataType::SCRIPT;
-																	}
-																	r_type.value = Variant();
-																	found = true;
-																}
+																r_type.value = Variant();
+																found = true;
 															}
-															break;
 														}
+														break;
 													}
 												}
 											}
@@ -2187,16 +2170,11 @@ static void _find_identifiers(const GDScriptCompletionContext &p_context, bool p
 	}
 
 	// Autoload singletons
-	List<PropertyInfo> props;
-	ProjectSettings::get_singleton()->get_property_list(&props);
-	for (List<PropertyInfo>::Element *E = props.front(); E; E = E->next()) {
-		String s = E->get().name;
-		if (!s.begins_with("autoload/")) {
-			continue;
-		}
-		String path = ProjectSettings::get_singleton()->get(s);
-		if (path.begins_with("*")) {
-			ScriptCodeCompletionOption option(s.get_slice("/", 1), ScriptCodeCompletionOption::KIND_CONSTANT);
+	const Map<StringName, ProjectSettings::AutoloadInfo> autoloads = ProjectSettings::get_singleton()->get_autoload_list();
+	for (Map<StringName, ProjectSettings::AutoloadInfo>::Element *E = autoloads.front(); E; E = E->next()) {
+		const ProjectSettings::AutoloadInfo &info = E->value();
+		if (info.is_singleton) {
+			ScriptCodeCompletionOption option(info.name.operator String().get_slice("/", 1), ScriptCodeCompletionOption::KIND_CONSTANT);
 			r_result.insert(option.display, option);
 		}
 	}
@@ -2326,18 +2304,11 @@ static void _find_call_arguments(const GDScriptCompletionContext &p_context, con
 				}
 #undef IS_METHOD_SIGNAL
 
-				if (ClassDB::is_parent_class(class_name, "Node") && (p_method == "get_node" || p_method == "has_node") && p_argidx == 0) {
+				if ((p_method == "get_node" || p_method == "has_node") && ClassDB::is_parent_class(class_name, "Node") && p_argidx == 0) {
 					// Get autoloads
-					List<PropertyInfo> props;
-					ProjectSettings::get_singleton()->get_property_list(&props);
-
-					for (List<PropertyInfo>::Element *E = props.front(); E; E = E->next()) {
-						String s = E->get().name;
-						if (!s.begins_with("autoload/")) {
-							continue;
-						}
-						String name = s.get_slice("/", 1);
-						ScriptCodeCompletionOption option("/root/" + name, ScriptCodeCompletionOption::KIND_NODE_PATH);
+					const Map<StringName, ProjectSettings::AutoloadInfo> autoloads = ProjectSettings::get_singleton()->get_autoload_list();
+					for (Map<StringName, ProjectSettings::AutoloadInfo>::Element *E = autoloads.front(); E; E = E->next()) {
+						ScriptCodeCompletionOption option("/root/" + E->value().name, ScriptCodeCompletionOption::KIND_NODE_PATH);
 						option.insert_text = quote_style + option.display + quote_style;
 						r_result.insert(option.display, option);
 					}
@@ -2578,17 +2549,9 @@ Error GDScriptLanguage::complete_code(const String &p_code, const String &p_path
 					}
 				}
 
-				// Get autoloads
-				List<PropertyInfo> props;
-				ProjectSettings::get_singleton()->get_property_list(&props);
-
-				for (List<PropertyInfo>::Element *E = props.front(); E; E = E->next()) {
-					String s = E->get().name;
-					if (!s.begins_with("autoload/")) {
-						continue;
-					}
-					String name = s.get_slice("/", 1);
-					ScriptCodeCompletionOption option(quote_style + "/root/" + name + quote_style, ScriptCodeCompletionOption::KIND_NODE_PATH);
+				const Map<StringName, ProjectSettings::AutoloadInfo> autoloads = ProjectSettings::get_singleton()->get_autoload_list();
+				for (Map<StringName, ProjectSettings::AutoloadInfo>::Element *E = autoloads.front(); E; E = E->next()) {
+					ScriptCodeCompletionOption option(quote_style + "/root/" + E->value().name + quote_style, ScriptCodeCompletionOption::KIND_NODE_PATH);
 					options.insert(option.display, option);
 				}
 			}
@@ -2825,14 +2788,10 @@ Error GDScriptLanguage::complete_code(const String &p_code, const String &p_path
 					ScriptCodeCompletionOption option(Variant::get_type_name((Variant::Type)i), ScriptCodeCompletionOption::KIND_CLASS);
 					options.insert(option.display, option);
 				}
-				List<PropertyInfo> props;
-				ProjectSettings::get_singleton()->get_property_list(&props);
-				for (List<PropertyInfo>::Element *E = props.front(); E; E = E->next()) {
-					String s = E->get().name;
-					if (!s.begins_with("autoload/")) {
-						continue;
-					}
-					ScriptCodeCompletionOption option(s.get_slice("/", 1), ScriptCodeCompletionOption::KIND_CLASS);
+
+				const Map<StringName, ProjectSettings::AutoloadInfo> autoloads = ProjectSettings::get_singleton()->get_autoload_list();
+				for (Map<StringName, ProjectSettings::AutoloadInfo>::Element *E = autoloads.front(); E; E = E->next()) {
+					ScriptCodeCompletionOption option(E->value().name, ScriptCodeCompletionOption::KIND_CLASS);
 					options.insert(option.display, option);
 				}
 			}
@@ -3372,20 +3331,12 @@ Error GDScriptLanguage::lookup_code(const String &p_code, const String &p_symbol
 
 			if (!is_function) {
 				// Guess in autoloads as singletons
-				List<PropertyInfo> props;
-				ProjectSettings::get_singleton()->get_property_list(&props);
-
-				for (List<PropertyInfo>::Element *E = props.front(); E; E = E->next()) {
-					String s = E->get().name;
-					if (!s.begins_with("autoload/")) {
-						continue;
-					}
-					String name = s.get_slice("/", 1);
-					if (name == String(p_symbol)) {
-						String path = ProjectSettings::get_singleton()->get(s);
-						if (path.begins_with("*")) {
-							String script = path.substr(1, path.length());
-
+				const Map<StringName, ProjectSettings::AutoloadInfo> autoloads = ProjectSettings::get_singleton()->get_autoload_list();
+				for (Map<StringName, ProjectSettings::AutoloadInfo>::Element *E = autoloads.front(); E; E = E->next()) {
+					const ProjectSettings::AutoloadInfo &info = E->value();
+					if (info.name == String(p_symbol)) {
+						String script = info.path;
+						if (info.is_singleton) {
 							if (!script.ends_with(".gd")) {
 								// Not a script, try find the script anyway,
 								// may have some success
